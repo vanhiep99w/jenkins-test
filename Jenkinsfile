@@ -245,6 +245,15 @@ pipeline {
 //             }
 //         }
 
+        stage('Package') {
+            when {
+                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
+            }
+            steps {
+                sh './mvnw package -DskipTests -B'
+            }
+        }
+
         stage('Build Docker Image') {
             when {
                 expression { return env.AUTO_DEPLOY_TARGET != 'none' }
