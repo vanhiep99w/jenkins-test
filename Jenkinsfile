@@ -292,6 +292,15 @@ pipeline {
                     """
                 }
             }
+            post {
+                always {
+                    sh """
+                        echo "Cleaning up local Docker images..."
+                        docker rmi ${DOCKER_IMAGE}:${APP_VERSION} || true
+                        docker rmi ${DOCKER_IMAGE}:latest || true
+                    """
+                }
+            }
         }
 
 //         stage('Deploy to Development') {
