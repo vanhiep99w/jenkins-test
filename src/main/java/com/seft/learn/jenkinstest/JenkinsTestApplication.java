@@ -10,6 +10,8 @@ public class JenkinsTestApplication {
 
         
         SpringApplication.run(JenkinsTestApplication.class, args);
+
+        
     }
 
 }
