@@ -87,6 +87,16 @@ pipeline {
             }
         }
 
+        stage('Commitlint') {
+            steps {
+                sh '''
+                    echo "Validating commit message format..."
+                    npm ci --prefer-offline --no-audit
+                    echo "${GIT_COMMIT_MSG}" | npx commitlint
+                '''
+            }
+        }
+
         stage('Build') {
             steps {
                 sh './mvnw clean compile -DskipTests -B -V'
@@ -298,6 +308,9 @@ pipeline {
                         echo "Cleaning up local Docker images..."
                         docker rmi ${DOCKER_IMAGE}:${APP_VERSION} || true
                         docker rmi ${DOCKER_IMAGE}:latest || true
+                        
+                        echo "Cleaning up build cache (keeping last 500MB)..."
+                        docker builder prune --keep-storage=500MB -f || true
                     """
                 }
             }
