@@ -318,6 +318,26 @@ pipeline {
             }
         }
 
+        stage('Release') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'dev'
+                    branch 'uat'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                        echo "Running semantic-release..."
+                        bun install --frozen-lockfile
+                        bun run release
+                    '''
+                }
+            }
+        }
+
 //         stage('Deploy to Development') {
 //             when {
 //                 expression { return env.AUTO_DEPLOY_TARGET in ['dev', 'uat', 'production'] }
