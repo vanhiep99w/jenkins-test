@@ -298,12 +298,12 @@ pipeline {
             when {
                 expression { return env.AUTO_DEPLOY_TARGET in ['dev', 'uat', 'production'] }
             }
-            steps {
-                script {
-                    env.DEPLOY_ENV = 'dev'
-                    deployToEnvironment('dev')
-                }
-            }
+//             steps {
+//                 script {
+//                     env.DEPLOY_ENV = 'dev'
+//                     deployToEnvironment('dev')
+//                 }
+//             }
             post {
                 success {
                     runSmokeTests('dev')
