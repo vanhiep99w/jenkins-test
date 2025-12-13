@@ -113,6 +113,39 @@ pipeline {
             }
         }
 
+        stage('AI Code Review') {
+            when {
+                changeRequest()
+            }
+            steps {
+                withCredentials([
+                    string(credentialsId: 'zai-api-key', variable: 'ZAI_API_KEY'),
+                    usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')
+                ]) {
+                    sh """
+                        echo "Running AI Code Review on PR #${CHANGE_ID}..."
+                        docker run --rm \
+                            -v \${WORKSPACE}/.pr_agent.toml:/app/.pr_agent.toml \
+                            -e OPENAI__KEY=\${ZAI_API_KEY} \
+                            -e OPENAI__API_BASE=https://api.z.ai/api/coding/paas/v4/ \
+                            -e CONFIG__MODEL=openai/glm-4.6 \
+                            -e CONFIG__FALLBACK_MODELS='["openai/glm-4.6"]' \
+                            -e CONFIG__CUSTOM_MODEL_MAX_TOKENS=32000 \
+                            -e GITHUB__USER_TOKEN=\${GITHUB_TOKEN} \
+                            -e GITHUB__DEPLOYMENT_TYPE=user \
+                            codiumai/pr-agent:latest \
+                            --pr_url=https://github.com/${GITHUB_USER}/jenkins-test/pull/${CHANGE_ID} \
+                            review
+                    """
+                }
+            }
+            post {
+                failure {
+                    echo "AI Code Review failed, continuing pipeline..."
+                }
+            }
+        }
+
         stage('Build') {
             steps {
                 sh './mvnw clean compile -DskipTests -B -V'
