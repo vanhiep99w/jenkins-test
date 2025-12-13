@@ -8,6 +8,7 @@ pipeline {
         DOCKER_REGISTRY = 'ghcr.io'
         DOCKER_IMAGE = "${DOCKER_REGISTRY}/${GITHUB_USER}/${APP_NAME}"
         DEPLOY_ENV = ''
+        IS_PR = "${env.CHANGE_ID ? 'true' : 'false'}"  // true if Pull Request
     }
 
     options {
@@ -23,20 +24,10 @@ pipeline {
     }
 
     parameters {
-        choice(
-            name: 'DEPLOY_TARGET',
-            choices: ['none', 'dev', 'staging', 'production'],
-            description: 'Select deployment target environment'
-        )
         booleanParam(
             name: 'SKIP_TESTS',
             defaultValue: false,
             description: 'Skip test execution (not recommended)'
-        )
-        booleanParam(
-            name: 'FORCE_DEPLOY',
-            defaultValue: false,
-            description: 'Force deployment even if tests fail (emergency only)'
         )
     }
 
@@ -44,8 +35,30 @@ pipeline {
         stage('Initialization') {
             steps {
                 script {
-                    currentBuild.displayName = "#${BUILD_NUMBER} - ${env.GIT_BRANCH ?: 'local'}"
+                    currentBuild.displayName = "#${BUILD_NUMBER} - ${env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'local'}"
                     currentBuild.description = "Commit: ${env.GIT_COMMIT?.take(7) ?: 'N/A'}"
+                    
+                    // Auto-determine deploy target based on branch
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''
+                    branch = branch.replaceAll('origin/', '')
+                    
+                    if (env.CHANGE_ID) {
+                        // Pull Request - test only, no deploy
+                        env.AUTO_DEPLOY_TARGET = 'none'
+                        echo "Pull Request #${env.CHANGE_ID} - Build & Test only"
+                    } else if (branch == 'dev') {
+                        env.AUTO_DEPLOY_TARGET = 'dev'
+                        echo "Dev branch - Auto deploy to DEV"
+                    } else if (branch == 'uat') {
+                        env.AUTO_DEPLOY_TARGET = 'uat'
+                        echo "UAT branch - Auto deploy to UAT"
+                    } else if (branch == 'main' || branch == 'master' || branch == 'production') {
+                        env.AUTO_DEPLOY_TARGET = 'production'
+                        echo "Production branch - Requires manual approval"
+                    } else {
+                        env.AUTO_DEPLOY_TARGET = 'none'
+                        echo "Feature branch - Build & Test only"
+                    }
                 }
                 sh '''
                     echo "=== Build Environment ==="
@@ -232,21 +245,30 @@ pipeline {
 //             }
 //         }
 
-        stage('Build Docker Image') {
+        stage('Package') {
             when {
-                expression { return params.DEPLOY_TARGET != 'none' }
+                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
             }
             steps {
-                script {
-                    docker.build("${DOCKER_IMAGE}:${APP_VERSION}", "--build-arg JAR_FILE=target/*.jar .")
-                    docker.build("${DOCKER_IMAGE}:latest", "--build-arg JAR_FILE=target/*.jar .")
-                }
+                sh './mvnw package -DskipTests -B'
+            }
+        }
+
+        stage('Build Docker Image') {
+            when {
+                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
+            }
+            steps {
+                sh """
+                    docker build --build-arg JAR_FILE=target/*.jar -t ${DOCKER_IMAGE}:${APP_VERSION} .
+                    docker tag ${DOCKER_IMAGE}:${APP_VERSION} ${DOCKER_IMAGE}:latest
+                """
             }
         }
 
 //         stage('Container Security Scan') {
 //             when {
-//                 expression { return params.DEPLOY_TARGET != 'none' }
+//                 expression { return env.AUTO_DEPLOY_TARGET != 'none' }
 //             }
 //             steps {
 //                 sh '''
@@ -258,58 +280,58 @@ pipeline {
 
         stage('Push Docker Image') {
             when {
-                expression { return params.DEPLOY_TARGET != 'none' }
+                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
             }
             steps {
-                script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'github-credentials') {
-                        docker.image("${DOCKER_IMAGE}:${APP_VERSION}").push()
-                        if (env.GIT_BRANCH == 'main' || env.GIT_BRANCH == 'master') {
-                            docker.image("${DOCKER_IMAGE}:latest").push()
-                        }
-                    }
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh """
+                        echo \$DOCKER_PASS | docker login ${DOCKER_REGISTRY} -u \$DOCKER_USER --password-stdin
+                        docker push ${DOCKER_IMAGE}:${APP_VERSION}
+                        docker push ${DOCKER_IMAGE}:latest
+                        docker logout ${DOCKER_REGISTRY}
+                    """
                 }
             }
         }
 
-        stage('Deploy to Development') {
-            when {
-                expression { return params.DEPLOY_TARGET in ['dev', 'staging', 'production'] }
-            }
-            steps {
-                script {
-                    env.DEPLOY_ENV = 'dev'
-                    deployToEnvironment('dev')
-                }
-            }
-            post {
-                success {
-                    runSmokeTests('dev')
-                }
-            }
-        }
+//         stage('Deploy to Development') {
+//             when {
+//                 expression { return env.AUTO_DEPLOY_TARGET in ['dev', 'uat', 'production'] }
+//             }
+//             steps {
+//                 script {
+//                     env.DEPLOY_ENV = 'dev'
+//                     deployToEnvironment('dev')
+//                 }
+//             }
+//             post {
+//                 success {
+//                     runSmokeTests('dev')
+//                 }
+//             }
+//         }
 
-        stage('Deploy to Staging') {
+        stage('Deploy to UAT') {
             when {
-                expression { return params.DEPLOY_TARGET in ['staging', 'production'] }
+                expression { return env.AUTO_DEPLOY_TARGET in ['uat', 'production'] }
             }
             steps {
                 script {
-                    env.DEPLOY_ENV = 'staging'
-                    deployToEnvironment('staging')
+                    env.DEPLOY_ENV = 'uat'
+                    deployToEnvironment('uat')
                 }
             }
             post {
                 success {
-                    runSmokeTests('staging')
-                    runPerformanceTests('staging')
+                    runSmokeTests('uat')
+                    runPerformanceTests('uat')
                 }
             }
         }
 
         stage('Production Approval') {
             when {
-                expression { return params.DEPLOY_TARGET == 'production' }
+                expression { return env.AUTO_DEPLOY_TARGET == 'production' }
             }
             steps {
                 script {
@@ -352,7 +374,7 @@ pipeline {
 
         stage('Deploy to Production') {
             when {
-                expression { return params.DEPLOY_TARGET == 'production' }
+                expression { return env.AUTO_DEPLOY_TARGET == 'production' }
             }
             steps {
                 script {
@@ -548,23 +570,23 @@ def createGitTag(String tag) {
 def getEnvironmentUrl(String environment, String slot = null) {
     def urls = [
         'dev': 'https://dev.app.company.com',
-        'staging': 'https://staging.app.company.com',
+        'uat': 'https://uat.app.company.com',
         'production': slot ? "https://${slot}.prod.app.company.com" : 'https://app.company.com'
     ]
     return urls[environment]
 }
 
 def getReplicaCount(String environment) {
-    def counts = ['dev': 1, 'staging': 2, 'production': 3]
+    def counts = ['dev': 1, 'uat': 2, 'production': 3]
     return counts[environment] ?: 1
 }
 
 def getMemoryRequest(String environment) {
-    def memory = ['dev': '256Mi', 'staging': '512Mi', 'production': '1Gi']
+    def memory = ['dev': '256Mi', 'uat': '512Mi', 'production': '1Gi']
     return memory[environment] ?: '256Mi'
 }
 
 def getMemoryLimit(String environment) {
-    def memory = ['dev': '512Mi', 'staging': '1Gi', 'production': '2Gi']
+    def memory = ['dev': '512Mi', 'uat': '1Gi', 'production': '2Gi']
     return memory[environment] ?: '512Mi'
 }
