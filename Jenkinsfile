@@ -91,8 +91,10 @@ pipeline {
             steps {
                 sh '''
                     echo "Validating commit message format..."
-                    npm ci --prefer-offline --no-audit
-                    echo "${GIT_COMMIT_MSG}" | npx commitlint
+                    bun install --frozen-lockfile
+                    git log -1 --pretty=%B > .commit-msg-temp
+                    bun x commitlint --edit .commit-msg-temp
+                    rm -f .commit-msg-temp
                 '''
             }
         }
