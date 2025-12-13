@@ -19,7 +19,8 @@ pipeline {
     }
 
     triggers {
-        githubPush()
+        githubPush()                 // Works if Jenkins is public
+        pollSCM('H/2 * * * *')       // Fallback: check every 2 minutes
     }
 
     parameters {
