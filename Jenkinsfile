@@ -294,22 +294,22 @@ pipeline {
             }
         }
 
-        stage('Deploy to Development') {
-            when {
-                expression { return env.AUTO_DEPLOY_TARGET in ['dev', 'uat', 'production'] }
-            }
+//         stage('Deploy to Development') {
+//             when {
+//                 expression { return env.AUTO_DEPLOY_TARGET in ['dev', 'uat', 'production'] }
+//             }
 //             steps {
 //                 script {
 //                     env.DEPLOY_ENV = 'dev'
 //                     deployToEnvironment('dev')
 //                 }
 //             }
-            post {
-                success {
-                    runSmokeTests('dev')
-                }
-            }
-        }
+//             post {
+//                 success {
+//                     runSmokeTests('dev')
+//                 }
+//             }
+//         }
 
         stage('Deploy to UAT') {
             when {
