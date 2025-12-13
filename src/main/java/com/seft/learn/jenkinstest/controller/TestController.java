@@ -22,7 +22,7 @@ public class TestController {
         ));
 
 
-        
+
     }
 
     @GetMapping("/hello")
