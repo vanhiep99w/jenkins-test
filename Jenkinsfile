@@ -404,21 +404,21 @@ pipeline {
                 def buildStatus = currentBuild.currentResult
                 def color = buildStatus == 'SUCCESS' ? 'good' : 'danger'
                 
-                // Slack notification
-                slackSend(
-                    channel: '#ci-cd-notifications',
-                    color: color,
-                    message: """
-                        *${APP_NAME}* - Build #${BUILD_NUMBER}
-                        *Status:* ${buildStatus}
-                        *Branch:* ${env.GIT_BRANCH ?: 'N/A'}
-                        *Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
-                        *Author:* ${env.GIT_AUTHOR ?: 'N/A'}
-                        *Duration:* ${currentBuild.durationString}
-                        *Deploy Target:* ${params.DEPLOY_TARGET}
-                        <${BUILD_URL}|View Build>
-                    """
-                )
+//                 // Slack notification
+//                 slackSend(
+//                     channel: '#ci-cd-notifications',
+//                     color: color,
+//                     message: """
+//                         *${APP_NAME}* - Build #${BUILD_NUMBER}
+//                         *Status:* ${buildStatus}
+//                         *Branch:* ${env.GIT_BRANCH ?: 'N/A'}
+//                         *Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
+//                         *Author:* ${env.GIT_AUTHOR ?: 'N/A'}
+//                         *Duration:* ${currentBuild.durationString}
+//                         *Deploy Target:* ${params.DEPLOY_TARGET}
+//                         <${BUILD_URL}|View Build>
+//                     """
+//                 )
             }
         }
         
@@ -433,20 +433,20 @@ pipeline {
         
         failure {
             echo "Pipeline failed!"
-            emailext(
-                subject: "FAILED: ${APP_NAME} Build #${BUILD_NUMBER}",
-                body: """
-                    Build failed for ${APP_NAME}.
-                    
-                    Build: #${BUILD_NUMBER}
-                    Branch: ${env.GIT_BRANCH}
-                    Commit: ${env.GIT_COMMIT}
-                    
-                    Check console output at: ${BUILD_URL}console
-                """,
-                to: '${DEFAULT_RECIPIENTS}',
-                recipientProviders: [culprits(), requestor()]
-            )
+//             emailext(
+//                 subject: "FAILED: ${APP_NAME} Build #${BUILD_NUMBER}",
+//                 body: """
+//                     Build failed for ${APP_NAME}.
+//
+//                     Build: #${BUILD_NUMBER}
+//                     Branch: ${env.GIT_BRANCH}
+//                     Commit: ${env.GIT_COMMIT}
+//
+//                     Check console output at: ${BUILD_URL}console
+//                 """,
+//                 to: '${DEFAULT_RECIPIENTS}',
+//                 recipientProviders: [culprits(), requestor()]
+//             )
         }
         
         unstable {
