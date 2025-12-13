@@ -2,6 +2,7 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 
 LABEL maintainer="DevOps Team"
 LABEL description="Jenkins Test Spring Boot Application"
+LABEL org.opencontainers.image.source="https://github.com/vanhiep99w/jenkins-test"
 
 RUN addgroup -g 1001 -S appgroup && \
     adduser -u 1001 -S appuser -G appgroup
