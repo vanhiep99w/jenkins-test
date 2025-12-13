@@ -250,10 +250,10 @@ pipeline {
                 expression { return env.AUTO_DEPLOY_TARGET != 'none' }
             }
             steps {
-                script {
-                    docker.build("${DOCKER_IMAGE}:${APP_VERSION}", "--build-arg JAR_FILE=target/*.jar .")
-                    docker.build("${DOCKER_IMAGE}:latest", "--build-arg JAR_FILE=target/*.jar .")
-                }
+                sh """
+                    docker build --build-arg JAR_FILE=target/*.jar -t ${DOCKER_IMAGE}:${APP_VERSION} .
+                    docker tag ${DOCKER_IMAGE}:${APP_VERSION} ${DOCKER_IMAGE}:latest
+                """
             }
         }
 
@@ -274,13 +274,13 @@ pipeline {
                 expression { return env.AUTO_DEPLOY_TARGET != 'none' }
             }
             steps {
-                script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'github-credentials') {
-                        docker.image("${DOCKER_IMAGE}:${APP_VERSION}").push()
-                        if (env.GIT_BRANCH == 'main' || env.GIT_BRANCH == 'master') {
-                            docker.image("${DOCKER_IMAGE}:latest").push()
-                        }
-                    }
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh """
+                        echo \$DOCKER_PASS | docker login ${DOCKER_REGISTRY} -u \$DOCKER_USER --password-stdin
+                        docker push ${DOCKER_IMAGE}:${APP_VERSION}
+                        docker push ${DOCKER_IMAGE}:latest
+                        docker logout ${DOCKER_REGISTRY}
+                    """
                 }
             }
         }
