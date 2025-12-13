@@ -262,7 +262,7 @@ pipeline {
             }
             steps {
                 script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'ghcr-credentials') {
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'github-credentials') {
                         docker.image("${DOCKER_IMAGE}:${APP_VERSION}").push()
                         if (env.GIT_BRANCH == 'main' || env.GIT_BRANCH == 'master') {
                             docker.image("${DOCKER_IMAGE}:latest").push()
