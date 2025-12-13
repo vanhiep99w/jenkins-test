@@ -332,7 +332,7 @@ pipeline {
                     sh '''
                         echo "Running semantic-release..."
                         bun install --frozen-lockfile
-                        bun run release
+                        HUSKY=0 bun run release
                     '''
                 }
             }
