@@ -87,6 +87,18 @@ pipeline {
             }
         }
 
+        stage('Commitlint') {
+            steps {
+                sh '''
+                    echo "Validating commit message format..."
+                    bun install --frozen-lockfile
+                    git log -1 --pretty=%B > .commit-msg-temp
+                    bun x commitlint --edit .commit-msg-temp
+                    rm -f .commit-msg-temp
+                '''
+            }
+        }
+
         stage('Build') {
             steps {
                 sh './mvnw clean compile -DskipTests -B -V'
@@ -298,7 +310,30 @@ pipeline {
                         echo "Cleaning up local Docker images..."
                         docker rmi ${DOCKER_IMAGE}:${APP_VERSION} || true
                         docker rmi ${DOCKER_IMAGE}:latest || true
+                        
+                        echo "Cleaning up build cache (keeping last 500MB)..."
+                        docker builder prune --keep-storage=500MB -f || true
                     """
+                }
+            }
+        }
+
+        stage('Release') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                    branch 'dev'
+                    branch 'uat'
+                }
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                        echo "Running semantic-release..."
+                        bun install --frozen-lockfile
+                        bun run release
+                    '''
                 }
             }
         }
