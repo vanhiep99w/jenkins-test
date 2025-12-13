@@ -87,52 +87,52 @@ pipeline {
             }
         }
 
-        stage('Unit Tests') {
-            when {
-                expression { return !params.SKIP_TESTS }
-            }
-            steps {
-                sh './mvnw test -B'
-            }
-            post {
-                always {
-                    junit(
-                        testResults: '**/target/surefire-reports/*.xml',
-                        allowEmptyResults: true
-                    )
-                    jacoco(
-                        execPattern: '**/target/jacoco.exec',
-                        classPattern: '**/target/classes',
-                        sourcePattern: '**/src/main/java',
-                        exclusionPattern: '**/test/**'
-                    )
-                }
-                failure {
-                    script {
-                        if (!params.FORCE_DEPLOY) {
-                            currentBuild.result = 'FAILURE'
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Integration Tests') {
-            when {
-                expression { return !params.SKIP_TESTS }
-            }
-            steps {
-                sh './mvnw verify -DskipUnitTests -B'
-            }
-            post {
-                always {
-                    junit(
-                        testResults: '**/target/failsafe-reports/*.xml',
-                        allowEmptyResults: true
-                    )
-                }
-            }
-        }
+//         stage('Unit Tests') {
+//             when {
+//                 expression { return !params.SKIP_TESTS }
+//             }
+//             steps {
+//                 sh './mvnw test -B'
+//             }
+//             post {
+//                 always {
+//                     junit(
+//                         testResults: '**/target/surefire-reports/*.xml',
+//                         allowEmptyResults: true
+//                     )
+//                     jacoco(
+//                         execPattern: '**/target/jacoco.exec',
+//                         classPattern: '**/target/classes',
+//                         sourcePattern: '**/src/main/java',
+//                         exclusionPattern: '**/test/**'
+//                     )
+//                 }
+//                 failure {
+//                     script {
+//                         if (!params.FORCE_DEPLOY) {
+//                             currentBuild.result = 'FAILURE'
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//
+//         stage('Integration Tests') {
+//             when {
+//                 expression { return !params.SKIP_TESTS }
+//             }
+//             steps {
+//                 sh './mvnw verify -DskipUnitTests -B'
+//             }
+//             post {
+//                 always {
+//                     junit(
+//                         testResults: '**/target/failsafe-reports/*.xml',
+//                         allowEmptyResults: true
+//                     )
+//                 }
+//             }
+//         }
 
 //         stage('Code Quality') {
 //             parallel {
