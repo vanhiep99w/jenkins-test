@@ -20,7 +20,6 @@ public class TestController {
                 "timestamp", LocalDateTime.now().toString(),
                 "service", "jenkins-test"
         ));
-
     }
 
     @GetMapping("/hello")
