@@ -4,9 +4,9 @@ pipeline {
     environment {
         APP_NAME = 'jenkins-test'
         APP_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
-        DOCKER_REGISTRY = credentials('docker-registry-url')
-        DOCKER_IMAGE = "${DOCKER_REGISTRY}/${APP_NAME}"
-        SONAR_HOST_URL = credentials('sonar-host-url')
+        GITHUB_USER = 'vanhiep99w'
+        DOCKER_REGISTRY = 'ghcr.io'
+        DOCKER_IMAGE = "${DOCKER_REGISTRY}/${GITHUB_USER}/${APP_NAME}"
         DEPLOY_ENV = ''
     }
 
@@ -32,11 +32,6 @@ pipeline {
             name: 'SKIP_TESTS',
             defaultValue: false,
             description: 'Skip test execution (not recommended)'
-        )
-        booleanParam(
-            name: 'SKIP_SONAR',
-            defaultValue: false,
-            description: 'Skip SonarQube analysis'
         )
         booleanParam(
             name: 'FORCE_DEPLOY',
@@ -267,7 +262,7 @@ pipeline {
             }
             steps {
                 script {
-                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-credentials') {
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'ghcr-credentials') {
                         docker.image("${DOCKER_IMAGE}:${APP_VERSION}").push()
                         if (env.GIT_BRANCH == 'main' || env.GIT_BRANCH == 'master') {
                             docker.image("${DOCKER_IMAGE}:latest").push()
