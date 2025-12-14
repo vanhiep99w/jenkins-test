@@ -23,8 +23,8 @@ jobs:
         uses: qodo-ai/pr-agent@main
         env:
           OPENAI_KEY: ${{ secrets.ZAI_API_KEY }}
-          OPENAI.API_BASE: "https://api.z.ai/api/coding/paas/v4/"
-          CONFIG.MODEL: "openai/glm-4.6"
-          CONFIG.FALLBACK_MODELS: '["openai/glm-4.6"]'
-          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "32000"
+          OPENAI__API_BASE: "https://api.z.ai/api/coding/paas/v4/"
+          CONFIG__MODEL: "openai/glm-4.6"
+          CONFIG__FALLBACK_MODELS: '["openai/glm-4.6"]'
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "32000"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
