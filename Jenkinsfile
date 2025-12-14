@@ -23,24 +23,38 @@ pipeline {
         githubPush()                 // Trigger on push & PR
     }
 
-    parameters {
-        booleanParam(
-            name: 'SKIP_TESTS',
-            defaultValue: false,
-            description: 'Skip test execution (not recommended)'
-        )
-    }
-
     stages {
         stage('Skip CI Check') {
             steps {
                 script {
                     def commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+                    
+                    // Check for skip ci
                     if (commitMsg.contains('[skip ci]') || commitMsg.contains('[ci skip]')) {
                         currentBuild.result = 'NOT_BUILT'
                         currentBuild.description = 'Skipped: [skip ci] in commit message'
                         echo "Skipping build due to [skip ci] in commit message"
                         error('Skipping build - [skip ci] detected')
+                    }
+                    
+                    // Parse CI control flags
+                    env.SKIP_TESTS = commitMsg.contains('[skip tests]') ? 'true' : 'false'
+                    env.SKIP_REVIEW = commitMsg.contains('[skip review]') ? 'true' : 'false'
+                    env.SKIP_DEPLOY = commitMsg.contains('[skip deploy]') ? 'true' : 'false'
+                    env.SKIP_DOCKER = commitMsg.contains('[skip docker]') ? 'true' : 'false'
+                    env.ONLY_BUILD = commitMsg.contains('[only build]') ? 'true' : 'false'
+                    
+                    // Log detected flags
+                    def flags = []
+                    if (env.SKIP_TESTS == 'true') flags.add('skip tests')
+                    if (env.SKIP_REVIEW == 'true') flags.add('skip review')
+                    if (env.SKIP_DEPLOY == 'true') flags.add('skip deploy')
+                    if (env.SKIP_DOCKER == 'true') flags.add('skip docker')
+                    if (env.ONLY_BUILD == 'true') flags.add('only build')
+                    
+                    if (flags.size() > 0) {
+                        echo "CI Control Flags detected: ${flags.join(', ')}"
+                        currentBuild.description = "Flags: ${flags.join(', ')}"
                     }
                 }
             }
@@ -113,38 +127,39 @@ pipeline {
             }
         }
 
-        stage('AI Code Review') {
-            when {
-                changeRequest()
-            }
-            steps {
-                withCredentials([
-                    string(credentialsId: 'zai-api-key', variable: 'ZAI_API_KEY'),
-                    usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')
-                ]) {
-                    sh """
-                        echo "Running AI Code Review on PR #${CHANGE_ID}..."
-                        docker run --rm \
-                            -v \${WORKSPACE}/.pr_agent.toml:/app/.pr_agent.toml \
-                            -e OPENAI__KEY=\${ZAI_API_KEY} \
-                            -e OPENAI__API_BASE=https://api.z.ai/api/coding/paas/v4/ \
-                            -e CONFIG__MODEL=openai/glm-4.6 \
-                            -e CONFIG__FALLBACK_MODELS='["openai/glm-4.6"]' \
-                            -e CONFIG__CUSTOM_MODEL_MAX_TOKENS=32000 \
-                            -e GITHUB__USER_TOKEN=\${GITHUB_TOKEN} \
-                            -e GITHUB__DEPLOYMENT_TYPE=user \
-                            codiumai/pr-agent:latest \
-                            --pr_url=https://github.com/${GITHUB_USER}/jenkins-test/pull/${CHANGE_ID} \
-                            review
-                    """
-                }
-            }
-            post {
-                failure {
-                    echo "AI Code Review failed, continuing pipeline..."
-                }
-            }
-        }
+ // used in github action
+//         stage('AI Code Review') {
+//             when {
+//                 changeRequest()
+//             }
+//             steps {
+//                 withCredentials([
+//                     string(credentialsId: 'zai-api-key', variable: 'ZAI_API_KEY'),
+//                     usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')
+//                 ]) {
+//                     sh """
+//                         echo "Running AI Code Review on PR #${CHANGE_ID}..."
+//                         docker run --rm \
+//                             -v \${WORKSPACE}/.pr_agent.toml:/app/.pr_agent.toml \
+//                             -e OPENAI__KEY=\${ZAI_API_KEY} \
+//                             -e OPENAI__API_BASE=https://api.z.ai/api/coding/paas/v4/ \
+//                             -e CONFIG__MODEL=openai/glm-4.6 \
+//                             -e CONFIG__FALLBACK_MODELS='["openai/glm-4.6"]' \
+//                             -e CONFIG__CUSTOM_MODEL_MAX_TOKENS=32000 \
+//                             -e GITHUB__USER_TOKEN=\${GITHUB_TOKEN} \
+//                             -e GITHUB__DEPLOYMENT_TYPE=user \
+//                             codiumai/pr-agent:latest \
+//                             --pr_url=https://github.com/${GITHUB_USER}/jenkins-test/pull/${CHANGE_ID} \
+//                             review
+//                     """
+//                 }
+//             }
+//             post {
+//                 failure {
+//                     echo "AI Code Review failed, continuing pipeline..."
+//                 }
+//             }
+//         }
 
         stage('Build') {
             steps {
@@ -306,7 +321,11 @@ pipeline {
 
         stage('Package') {
             when {
-                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET != 'none' && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' 
+                }
             }
             steps {
                 sh './mvnw package -DskipTests -B'
@@ -315,7 +334,12 @@ pipeline {
 
         stage('Build Docker Image') {
             when {
-                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET != 'none' && 
+                           env.SKIP_DOCKER != 'true' && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' 
+                }
             }
             steps {
                 sh """
@@ -339,7 +363,12 @@ pipeline {
 
         stage('Push Docker Image') {
             when {
-                expression { return env.AUTO_DEPLOY_TARGET != 'none' }
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET != 'none' && 
+                           env.SKIP_DOCKER != 'true' && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' 
+                }
             }
             steps {
                 withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -404,7 +433,11 @@ pipeline {
 
         stage('Deploy to UAT') {
             when {
-                expression { return env.AUTO_DEPLOY_TARGET in ['uat', 'production'] }
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET in ['uat', 'production'] && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' 
+                }
             }
             steps {
                 script {
@@ -422,7 +455,11 @@ pipeline {
 
         stage('Production Approval') {
             when {
-                expression { return env.AUTO_DEPLOY_TARGET == 'production' }
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET == 'production' && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' 
+                }
             }
             steps {
                 script {
@@ -465,7 +502,11 @@ pipeline {
 
         stage('Deploy to Production') {
             when {
-                expression { return env.AUTO_DEPLOY_TARGET == 'production' }
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET == 'production' && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' 
+                }
             }
             steps {
                 script {
