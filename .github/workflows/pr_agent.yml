@@ -1,0 +1,30 @@
+# This GitHub Action handles PR comment triggers for Qodo Merge tools
+# Jenkins handles automatic review on PR open, this handles comment commands
+
+name: PR-Agent Comment Trigger
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  pr_agent_comment:
+    # Only run on PR comments (not issue comments) and when comment starts with /
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - name: PR Agent Command
+        uses: qodo-ai/pr-agent@main
+        env:
+          OPENAI_KEY: ${{ secrets.ZAI_API_KEY }}
+          OPENAI.API_BASE: "https://api.z.ai/api/coding/paas/v4/"
+          CONFIG.MODEL: "openai/glm-4.6"
+          CONFIG.FALLBACK_MODELS: '["openai/glm-4.6"]'
+          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "32000"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
