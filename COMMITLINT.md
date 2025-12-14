@@ -61,6 +61,8 @@ echo "feat: my commit message" | npx commitlint
 
 You can control CI/CD pipeline behavior by adding flags to your commit message:
 
+### Skip Flags
+
 | Flag | Effect |
 |------|--------|
 | `[skip ci]` or `[ci skip]` | Skip entire pipeline |
@@ -68,7 +70,26 @@ You can control CI/CD pipeline behavior by adding flags to your commit message:
 | `[skip review]` | Skip AI code review |
 | `[skip deploy]` | Skip deployment stages |
 | `[skip docker]` | Skip Docker build/push |
+| `[skip lint]` | Skip commitlint validation |
+| `[skip release]` | Skip semantic release |
+
+### Action Flags
+
+| Flag | Effect |
+|------|--------|
 | `[only build]` | Only run build, skip tests/deploy |
+| `[wip]` | Work in progress: only lint + build |
+| `[hotfix]` | Fast-track: skip tests, deploy immediately |
+| `[full ci]` | Run ALL stages including disabled ones |
+| `[rollback]` | Rollback to previous deployment |
+
+### Deploy Flags
+
+| Flag | Effect |
+|------|--------|
+| `[deploy dev]` | Force deploy to dev environment |
+| `[deploy uat]` | Force deploy to UAT environment |
+| `[deploy prod]` | Force deploy to production (requires approval) |
 
 ### Examples
 
@@ -85,8 +106,24 @@ git commit -m "chore: minor update [skip review]"
 # Only build, no tests or deploy
 git commit -m "feat: wip feature [only build]"
 
+# Work in progress - minimal CI
+git commit -m "feat: incomplete feature [wip]"
+
+# Hotfix - fast deploy
+git commit -m "fix: critical bug [hotfix]"
+
+# Force deploy to specific environment
+git commit -m "feat: new feature [deploy dev]"
+git commit -m "fix: bug fix [deploy uat]"
+
+# Rollback previous deployment
+git commit -m "revert: rollback bad deploy [rollback]"
+
 # Combine flags
 git commit -m "fix: urgent fix [skip tests] [skip review]"
+
+# Run full CI pipeline
+git commit -m "feat: important feature [full ci]"
 ```
 
 ## Bypass Commitlint (Not Recommended)

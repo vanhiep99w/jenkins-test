@@ -1,14 +1,16 @@
+// =============================================================================
+// Jenkins CI/CD Pipeline
+// =============================================================================
+// Documentation: See COMMITLINT.md for CI control flags
+// Structure: See .jenkins/ for modular components
+// =============================================================================
+
 pipeline {
     agent any
 
     environment {
-        APP_NAME = 'jenkins-test'
         APP_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'local'}"
-        GITHUB_USER = 'vanhiep99w'
-        DOCKER_REGISTRY = 'ghcr.io'
-        DOCKER_IMAGE = "${DOCKER_REGISTRY}/${GITHUB_USER}/${APP_NAME}"
-        DEPLOY_ENV = ''
-        IS_PR = "${env.CHANGE_ID ? 'true' : 'false'}"  // true if Pull Request
+        BUILD_START_TIME = "${System.currentTimeMillis()}"
     }
 
     options {
@@ -20,105 +22,91 @@ pipeline {
     }
 
     triggers {
-        githubPush()                 // Trigger on push & PR
+        githubPush()
     }
 
     stages {
-        stage('Skip CI Check') {
+        // =====================================================================
+        // Phase 1: Initialization
+        // =====================================================================
+        stage('CI Control') {
             steps {
                 script {
+                    def ciFlags = load('.jenkins/utils/ci-flags.groovy')
+                    def helpers = load('.jenkins/utils/helpers.groovy')
+                    def config = load('.jenkins/config.groovy')
+                    
+                    // Get commit message and parse flags
                     def commitMsg = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+                    def flags = ciFlags.parseFlags(commitMsg)
                     
                     // Check for skip ci
-                    if (commitMsg.contains('[skip ci]') || commitMsg.contains('[ci skip]')) {
+                    if (flags.skipCi) {
                         currentBuild.result = 'NOT_BUILT'
-                        currentBuild.description = 'Skipped: [skip ci] in commit message'
-                        echo "Skipping build due to [skip ci] in commit message"
+                        currentBuild.description = 'Skipped: [skip ci]'
                         error('Skipping build - [skip ci] detected')
                     }
                     
-                    // Parse CI control flags
-                    env.SKIP_TESTS = commitMsg.contains('[skip tests]') ? 'true' : 'false'
-                    env.SKIP_REVIEW = commitMsg.contains('[skip review]') ? 'true' : 'false'
-                    env.SKIP_DEPLOY = commitMsg.contains('[skip deploy]') ? 'true' : 'false'
-                    env.SKIP_DOCKER = commitMsg.contains('[skip docker]') ? 'true' : 'false'
-                    env.ONLY_BUILD = commitMsg.contains('[only build]') ? 'true' : 'false'
+                    // Set environment variables
+                    ciFlags.setEnvironmentFlags(flags)
+                    env.APP_NAME = config.APP_NAME
+                    env.DOCKER_IMAGE = "${config.DOCKER_REGISTRY}/${config.GITHUB_USER}/${config.APP_NAME}"
                     
-                    // Log detected flags
-                    def flags = []
-                    if (env.SKIP_TESTS == 'true') flags.add('skip tests')
-                    if (env.SKIP_REVIEW == 'true') flags.add('skip review')
-                    if (env.SKIP_DEPLOY == 'true') flags.add('skip deploy')
-                    if (env.SKIP_DOCKER == 'true') flags.add('skip docker')
-                    if (env.ONLY_BUILD == 'true') flags.add('only build')
-                    
-                    if (flags.size() > 0) {
-                        echo "CI Control Flags detected: ${flags.join(', ')}"
-                        currentBuild.description = "Flags: ${flags.join(', ')}"
+                    // Log active flags
+                    def activeFlags = ciFlags.getActiveFlags(flags)
+                    if (activeFlags.size() > 0) {
+                        echo "CI Flags: ${activeFlags.join(', ')}"
+                        currentBuild.description = "Flags: ${activeFlags.join(', ')}"
                     }
+                    
+                    // Determine deploy target
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''
+                    env.AUTO_DEPLOY_TARGET = helpers.determineDeployTarget(branch, flags)
+                    
+                    // Set build display
+                    currentBuild.displayName = "#${BUILD_NUMBER} - ${branch.replaceAll('origin/', '')}"
                 }
             }
         }
 
-        stage('Initialization') {
+        stage('Rollback') {
+            when { expression { return env.IS_ROLLBACK == 'true' } }
             steps {
                 script {
-                    currentBuild.displayName = "#${BUILD_NUMBER} - ${env.GIT_BRANCH ?: env.BRANCH_NAME ?: 'local'}"
-                    currentBuild.description = "Commit: ${env.GIT_COMMIT?.take(7) ?: 'N/A'}"
+                    def deploy = load('.jenkins/stages/deploy.groovy')
+                    def notifications = load('.jenkins/utils/notifications.groovy')
                     
-                    // Auto-determine deploy target based on branch
-                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''
-                    branch = branch.replaceAll('origin/', '')
-                    
-                    if (env.CHANGE_ID) {
-                        // Pull Request - test only, no deploy
-                        env.AUTO_DEPLOY_TARGET = 'none'
-                        echo "Pull Request #${env.CHANGE_ID} - Build & Test only"
-                    } else if (branch == 'dev') {
-                        env.AUTO_DEPLOY_TARGET = 'dev'
-                        echo "Dev branch - Auto deploy to DEV"
-                    } else if (branch == 'uat') {
-                        env.AUTO_DEPLOY_TARGET = 'uat'
-                        echo "UAT branch - Auto deploy to UAT"
-                    } else if (branch == 'main' || branch == 'master' || branch == 'production') {
-                        env.AUTO_DEPLOY_TARGET = 'production'
-                        echo "Production branch - Requires manual approval"
-                    } else {
-                        env.AUTO_DEPLOY_TARGET = 'none'
-                        echo "Feature branch - Build & Test only"
-                    }
+                    echo "Initiating rollback..."
+                    deploy.rollback()
+                    currentBuild.description = "Rollback completed"
+                    notifications.send('SUCCESS', 'Rollback completed')
                 }
-                sh '''
-                    echo "=== Build Environment ==="
-                    echo "Java Version: $(java -version 2>&1 | head -1)"
-                    echo "Maven Wrapper: ./mvnw"
-                    echo "Build Number: ${BUILD_NUMBER}"
-                    echo "Branch: ${GIT_BRANCH:-local}"
-                    echo "========================="
-                '''
             }
         }
 
+        // =====================================================================
+        // Phase 2: Build & Validate
+        // =====================================================================
         stage('Checkout') {
+            when { expression { return env.IS_ROLLBACK != 'true' } }
             steps {
                 checkout scm
                 script {
-                    env.GIT_COMMIT_MSG = sh(
-                        script: 'git log -1 --pretty=%B',
-                        returnStdout: true
-                    ).trim()
-                    env.GIT_AUTHOR = sh(
-                        script: 'git log -1 --pretty=%an',
-                        returnStdout: true
-                    ).trim()
+                    env.GIT_COMMIT_MSG = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+                    env.GIT_AUTHOR = sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
                 }
             }
         }
 
         stage('Commitlint') {
+            when {
+                expression { 
+                    return env.IS_ROLLBACK != 'true' && env.SKIP_LINT != 'true'
+                }
+            }
             steps {
                 sh '''
-                    echo "Validating commit message format..."
+                    echo "Validating commit message..."
                     bun install --frozen-lockfile
                     git log -1 --pretty=%B > .commit-msg-temp
                     bun x commitlint --edit .commit-msg-temp
@@ -127,598 +115,298 @@ pipeline {
             }
         }
 
- // used in github action
-//         stage('AI Code Review') {
-//             when {
-//                 changeRequest()
-//             }
-//             steps {
-//                 withCredentials([
-//                     string(credentialsId: 'zai-api-key', variable: 'ZAI_API_KEY'),
-//                     usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')
-//                 ]) {
-//                     sh """
-//                         echo "Running AI Code Review on PR #${CHANGE_ID}..."
-//                         docker run --rm \
-//                             -v \${WORKSPACE}/.pr_agent.toml:/app/.pr_agent.toml \
-//                             -e OPENAI__KEY=\${ZAI_API_KEY} \
-//                             -e OPENAI__API_BASE=https://api.z.ai/api/coding/paas/v4/ \
-//                             -e CONFIG__MODEL=openai/glm-4.6 \
-//                             -e CONFIG__FALLBACK_MODELS='["openai/glm-4.6"]' \
-//                             -e CONFIG__CUSTOM_MODEL_MAX_TOKENS=32000 \
-//                             -e GITHUB__USER_TOKEN=\${GITHUB_TOKEN} \
-//                             -e GITHUB__DEPLOYMENT_TYPE=user \
-//                             codiumai/pr-agent:latest \
-//                             --pr_url=https://github.com/${GITHUB_USER}/jenkins-test/pull/${CHANGE_ID} \
-//                             review
-//                     """
-//                 }
-//             }
-//             post {
-//                 failure {
-//                     echo "AI Code Review failed, continuing pipeline..."
-//                 }
-//             }
-//         }
-
         stage('Build') {
+            when { expression { return env.IS_ROLLBACK != 'true' } }
             steps {
-                sh './mvnw clean compile -DskipTests -B -V'
+                sh '''
+                    echo "Building..."
+                    ./mvnw clean compile -DskipTests -B -V -Dmaven.repo.local=.m2/repository
+                '''
             }
-            post {
-                failure {
-                    script {
-                        currentBuild.result = 'FAILURE'
+        }
+
+        // =====================================================================
+        // Phase 3: Test & Quality
+        // =====================================================================
+        stage('Tests') {
+            when {
+                expression { 
+                    return env.IS_ROLLBACK != 'true' && 
+                           env.SKIP_TESTS != 'true' && 
+                           env.ONLY_BUILD != 'true' &&
+                           env.IS_WIP != 'true'
+                }
+            }
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        retry(2) {
+                            sh './mvnw test -B -Dmaven.repo.local=.m2/repository'
+                        }
+                    }
+                    post {
+                        always {
+                            junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: true
+                        }
+                    }
+                }
+                stage('Integration Tests') {
+                    steps {
+                        retry(2) {
+                            sh './mvnw verify -DskipUnitTests -B -Dmaven.repo.local=.m2/repository'
+                        }
+                    }
+                    post {
+                        always {
+                            junit testResults: '**/target/failsafe-reports/*.xml', allowEmptyResults: true
+                        }
                     }
                 }
             }
         }
 
-//         stage('Unit Tests') {
-//             when {
-//                 expression { return !params.SKIP_TESTS }
-//             }
-//             steps {
-//                 sh './mvnw test -B'
-//             }
-//             post {
-//                 always {
-//                     junit(
-//                         testResults: '**/target/surefire-reports/*.xml',
-//                         allowEmptyResults: true
-//                     )
-//                     jacoco(
-//                         execPattern: '**/target/jacoco.exec',
-//                         classPattern: '**/target/classes',
-//                         sourcePattern: '**/src/main/java',
-//                         exclusionPattern: '**/test/**'
-//                     )
-//                 }
-//                 failure {
-//                     script {
-//                         if (!params.FORCE_DEPLOY) {
-//                             currentBuild.result = 'FAILURE'
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//
-//         stage('Integration Tests') {
-//             when {
-//                 expression { return !params.SKIP_TESTS }
-//             }
-//             steps {
-//                 sh './mvnw verify -DskipUnitTests -B'
-//             }
-//             post {
-//                 always {
-//                     junit(
-//                         testResults: '**/target/failsafe-reports/*.xml',
-//                         allowEmptyResults: true
-//                     )
-//                 }
-//             }
-//         }
+        stage('Code Quality') {
+            when {
+                expression { 
+                    return env.IS_ROLLBACK != 'true' && 
+                           env.SKIP_TESTS != 'true' && 
+                           env.ONLY_BUILD != 'true' &&
+                           env.IS_WIP != 'true' &&
+                           env.IS_HOTFIX != 'true'
+                }
+            }
+            parallel {
+                stage('Security Scan') {
+                    steps {
+                        sh './mvnw dependency-check:check -B -Dmaven.repo.local=.m2/repository || true'
+                    }
+                }
+                stage('Coverage') {
+                    steps {
+                        sh './mvnw jacoco:report -B -Dmaven.repo.local=.m2/repository || true'
+                    }
+                }
+            }
+        }
 
-//         stage('Code Quality') {
-//             parallel {
-//                 stage('SonarQube Analysis') {
-//                     when {
-//                         expression { return !params.SKIP_SONAR }
-//                     }
-//                     steps {
-//                         withSonarQubeEnv('SonarQube') {
-//                             sh '''
-//                                 ./mvnw sonar:sonar \
-//                                     -Dsonar.projectKey=${APP_NAME} \
-//                                     -Dsonar.projectName=${APP_NAME} \
-//                                     -Dsonar.projectVersion=${APP_VERSION} \
-//                                     -Dsonar.java.coveragePlugin=jacoco \
-//                                     -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
-//                                     -B
-//                             '''
-//                         }
-//                     }
-//                 }
-//
-//                 stage('Dependency Check') {
-//                     steps {
-//                         sh './mvnw dependency-check:check -B || true'
-//                     }
-//                     post {
-//                         always {
-//                             dependencyCheckPublisher(
-//                                 pattern: '**/dependency-check-report.xml',
-//                                 failedTotalCritical: 1,
-//                                 failedTotalHigh: 5
-//                             )
-//                         }
-//                     }
-//                 }
-//
-//                 stage('License Check') {
-//                     steps {
-//                         sh './mvnw license:check -B || true'
-//                     }
-//                 }
-//             }
-//         }
-//
-//         stage('Quality Gate') {
-//             when {
-//                 expression { return !params.SKIP_SONAR }
-//             }
-//             steps {
-//                 timeout(time: 10, unit: 'MINUTES') {
-//                     waitForQualityGate abortPipeline: true
-//                 }
-//             }
-//         }
-//
-//         stage('Package') {
-//             steps {
-//                 sh './mvnw package -DskipTests -B'
-//                 archiveArtifacts(
-//                     artifacts: 'target/*.jar',
-//                     fingerprint: true,
-//                     onlyIfSuccessful: true
-//                 )
-//             }
-//         }
-//
-//         stage('Security Scan') {
-//             parallel {
-//                 stage('SAST - Static Analysis') {
-//                     steps {
-//                         sh '''
-//                             ./mvnw spotbugs:check -B || true
-//                         '''
-//                     }
-//                     post {
-//                         always {
-//                             recordIssues(
-//                                 tools: [spotBugs(pattern: '**/spotbugsXml.xml')],
-//                                 qualityGates: [[threshold: 10, type: 'TOTAL', unstable: true]]
-//                             )
-//                         }
-//                     }
-//                 }
-//
-//                 stage('Secret Detection') {
-//                     steps {
-//                         sh '''
-//                             echo "Scanning for hardcoded secrets..."
-//                             if grep -rn "password\\s*=\\s*['\"][^'\"]*['\"]" src/ --include="*.java" --include="*.properties" --include="*.yml" 2>/dev/null | grep -v "test"; then
-//                                 echo "WARNING: Potential hardcoded secrets found!"
-//                             fi
-//                             echo "Secret scan completed"
-//                         '''
-//                     }
-//                 }
-//             }
-//         }
-
+        // =====================================================================
+        // Phase 4: Package & Deploy
+        // =====================================================================
         stage('Package') {
             when {
                 expression { 
                     return env.AUTO_DEPLOY_TARGET != 'none' && 
                            env.SKIP_DEPLOY != 'true' && 
-                           env.ONLY_BUILD != 'true' 
+                           env.ONLY_BUILD != 'true' &&
+                           env.IS_ROLLBACK != 'true'
                 }
             }
             steps {
-                sh './mvnw package -DskipTests -B'
+                sh './mvnw package -DskipTests -B -Dmaven.repo.local=.m2/repository'
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Docker') {
             when {
                 expression { 
                     return env.AUTO_DEPLOY_TARGET != 'none' && 
                            env.SKIP_DOCKER != 'true' && 
                            env.SKIP_DEPLOY != 'true' && 
-                           env.ONLY_BUILD != 'true' 
+                           env.ONLY_BUILD != 'true' &&
+                           env.IS_ROLLBACK != 'true'
                 }
             }
-            steps {
-                sh """
-                    docker build --build-arg JAR_FILE=target/*.jar -t ${DOCKER_IMAGE}:${APP_VERSION} .
-                    docker tag ${DOCKER_IMAGE}:${APP_VERSION} ${DOCKER_IMAGE}:latest
-                """
-            }
-        }
-
-//         stage('Container Security Scan') {
-//             when {
-//                 expression { return env.AUTO_DEPLOY_TARGET != 'none' }
-//             }
-//             steps {
-//                 sh '''
-//                     echo "Running Trivy container scan..."
-//                     trivy image --severity HIGH,CRITICAL --exit-code 0 ${DOCKER_IMAGE}:${APP_VERSION} || true
-//                 '''
-//             }
-//         }
-
-        stage('Push Docker Image') {
-            when {
-                expression { 
-                    return env.AUTO_DEPLOY_TARGET != 'none' && 
-                           env.SKIP_DOCKER != 'true' && 
-                           env.SKIP_DEPLOY != 'true' && 
-                           env.ONLY_BUILD != 'true' 
+            stages {
+                stage('Build Image') {
+                    steps {
+                        sh """
+                            docker build --build-arg JAR_FILE=target/*.jar -t ${env.DOCKER_IMAGE}:${APP_VERSION} .
+                            docker tag ${env.DOCKER_IMAGE}:${APP_VERSION} ${env.DOCKER_IMAGE}:latest
+                        """
+                    }
                 }
-            }
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh """
-                        echo \$DOCKER_PASS | docker login ${DOCKER_REGISTRY} -u \$DOCKER_USER --password-stdin
-                        docker push ${DOCKER_IMAGE}:${APP_VERSION}
-                        docker push ${DOCKER_IMAGE}:latest
-                        docker logout ${DOCKER_REGISTRY}
-                    """
-                }
-            }
-            post {
-                always {
-                    sh """
-                        echo "Cleaning up local Docker images..."
-                        docker rmi ${DOCKER_IMAGE}:${APP_VERSION} || true
-                        docker rmi ${DOCKER_IMAGE}:latest || true
-                        
-                        echo "Cleaning up build cache (keeping last 500MB)..."
-                        docker builder prune --keep-storage=500MB -f || true
-                    """
+                stage('Push Image') {
+                    steps {
+                        script {
+                            def config = load('.jenkins/config.groovy')
+                            withCredentials([usernamePassword(credentialsId: config.GITHUB_CREDENTIALS, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                                sh """
+                                    echo \$PASS | docker login ${config.DOCKER_REGISTRY} -u \$USER --password-stdin
+                                    docker push ${env.DOCKER_IMAGE}:${APP_VERSION}
+                                    docker push ${env.DOCKER_IMAGE}:latest
+                                    docker logout ${config.DOCKER_REGISTRY}
+                                """
+                            }
+                        }
+                    }
+                    post {
+                        always {
+                            sh """
+                                docker rmi ${env.DOCKER_IMAGE}:${APP_VERSION} || true
+                                docker rmi ${env.DOCKER_IMAGE}:latest || true
+                            """
+                        }
+                    }
                 }
             }
         }
 
         stage('Release') {
             when {
-                anyOf {
-                    branch 'main'
-                    branch 'master'
-                    branch 'dev'
-                    branch 'uat'
+                allOf {
+                    anyOf {
+                        branch 'main'
+                        branch 'master'
+                        branch 'dev'
+                        branch 'uat'
+                    }
+                    expression { 
+                        return env.IS_ROLLBACK != 'true' && 
+                               env.SKIP_RELEASE != 'true' &&
+                               env.ONLY_BUILD != 'true' &&
+                               env.IS_WIP != 'true'
+                    }
                 }
             }
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                    sh '''
-                        echo "Running semantic-release..."
-                        bun install --frozen-lockfile
-                        HUSKY=0 bun run release
-                    '''
+                script {
+                    def config = load('.jenkins/config.groovy')
+                    withCredentials([usernamePassword(credentialsId: config.GITHUB_CREDENTIALS, usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                        sh 'HUSKY=0 bun run release'
+                    }
                 }
             }
         }
 
-//         stage('Deploy to Development') {
-//             when {
-//                 expression { return env.AUTO_DEPLOY_TARGET in ['dev', 'uat', 'production'] }
-//             }
-//             steps {
-//                 script {
-//                     env.DEPLOY_ENV = 'dev'
-//                     deployToEnvironment('dev')
-//                 }
-//             }
-//             post {
-//                 success {
-//                     runSmokeTests('dev')
-//                 }
-//             }
-//         }
-
-        stage('Deploy to UAT') {
+        // =====================================================================
+        // Phase 5: Deploy to Environments
+        // =====================================================================
+        stage('Deploy UAT') {
             when {
                 expression { 
                     return env.AUTO_DEPLOY_TARGET in ['uat', 'production'] && 
                            env.SKIP_DEPLOY != 'true' && 
-                           env.ONLY_BUILD != 'true' 
+                           env.ONLY_BUILD != 'true' &&
+                           env.IS_ROLLBACK != 'true'
                 }
             }
             steps {
                 script {
-                    env.DEPLOY_ENV = 'uat'
-                    deployToEnvironment('uat')
+                    def deploy = load('.jenkins/stages/deploy.groovy')
+                    deploy.deployToEnvironment('uat')
                 }
             }
             post {
                 success {
-                    runSmokeTests('uat')
-                    runPerformanceTests('uat')
-                }
-            }
-        }
-
-        stage('Production Approval') {
-            when {
-                expression { 
-                    return env.AUTO_DEPLOY_TARGET == 'production' && 
-                           env.SKIP_DEPLOY != 'true' && 
-                           env.ONLY_BUILD != 'true' 
-                }
-            }
-            steps {
-                script {
-                    def approvers = 'devops-team,tech-leads'
-                    emailext(
-                        subject: "Production Deployment Approval Required - ${APP_NAME}",
-                        body: """
-                            Production deployment approval required for ${APP_NAME}.
-                            
-                            Build: #${BUILD_NUMBER}
-                            Version: ${APP_VERSION}
-                            Branch: ${env.GIT_BRANCH}
-                            Commit: ${env.GIT_COMMIT}
-                            Author: ${env.GIT_AUTHOR}
-                            Message: ${env.GIT_COMMIT_MSG}
-                            
-                            Please review and approve at: ${BUILD_URL}input
-                        """,
-                        to: approvers,
-                        recipientProviders: [requestor()]
-                    )
-                    
-                    timeout(time: 24, unit: 'HOURS') {
-                        input(
-                            message: 'Deploy to Production?',
-                            ok: 'Deploy',
-                            submitter: approvers,
-                            parameters: [
-                                booleanParam(
-                                    name: 'CONFIRM_DEPLOY',
-                                    defaultValue: false,
-                                    description: 'I confirm this deployment has been reviewed'
-                                )
-                            ]
-                        )
-                    }
-                }
-            }
-        }
-
-        stage('Deploy to Production') {
-            when {
-                expression { 
-                    return env.AUTO_DEPLOY_TARGET == 'production' && 
-                           env.SKIP_DEPLOY != 'true' && 
-                           env.ONLY_BUILD != 'true' 
-                }
-            }
-            steps {
-                script {
-                    env.DEPLOY_ENV = 'production'
-                    
-                    // Blue-Green Deployment
-                    def currentSlot = getCurrentProductionSlot()
-                    def targetSlot = currentSlot == 'blue' ? 'green' : 'blue'
-                    
-                    echo "Deploying to ${targetSlot} slot (current: ${currentSlot})"
-                    deployToEnvironment('production', targetSlot)
-                    
-                    // Health check on new deployment
-                    def healthCheck = runHealthCheck('production', targetSlot)
-                    if (healthCheck) {
-                        switchProductionTraffic(targetSlot)
-                        echo "Traffic switched to ${targetSlot} slot"
-                    } else {
-                        error "Health check failed on ${targetSlot} slot"
-                    }
-                }
-            }
-            post {
-                success {
-                    runSmokeTests('production')
-                }
-                failure {
                     script {
-                        echo "Production deployment failed, initiating rollback..."
-                        rollbackProduction()
+                        def deploy = load('.jenkins/stages/deploy.groovy')
+                        deploy.runSmokeTests('uat')
+                    }
+                }
+            }
+        }
+
+        stage('Production') {
+            when {
+                expression { 
+                    return env.AUTO_DEPLOY_TARGET == 'production' && 
+                           env.SKIP_DEPLOY != 'true' && 
+                           env.ONLY_BUILD != 'true' &&
+                           env.IS_ROLLBACK != 'true'
+                }
+            }
+            stages {
+                stage('Approval') {
+                    steps {
+                        script {
+                            def config = load('.jenkins/config.groovy')
+                            timeout(time: config.APPROVAL_TIMEOUT_HOURS, unit: 'HOURS') {
+                                input(
+                                    message: 'Deploy to Production?',
+                                    ok: 'Deploy',
+                                    submitter: config.PROD_APPROVERS
+                                )
+                            }
+                        }
+                    }
+                }
+                stage('Deploy') {
+                    steps {
+                        script {
+                            def deploy = load('.jenkins/stages/deploy.groovy')
+                            def currentSlot = deploy.getCurrentProductionSlot()
+                            def targetSlot = currentSlot == 'blue' ? 'green' : 'blue'
+                            
+                            deploy.deployToEnvironment('production', targetSlot)
+                            
+                            if (deploy.runHealthCheck('production', targetSlot)) {
+                                deploy.switchProductionTraffic(targetSlot)
+                                echo "Deployed to ${targetSlot} slot"
+                            } else {
+                                error "Health check failed"
+                            }
+                        }
+                    }
+                    post {
+                        success {
+                            script {
+                                def deploy = load('.jenkins/stages/deploy.groovy')
+                                deploy.runSmokeTests('production')
+                            }
+                        }
+                        failure {
+                            script {
+                                def deploy = load('.jenkins/stages/deploy.groovy')
+                                deploy.rollback()
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
+    // =========================================================================
+    // Post Actions
+    // =========================================================================
     post {
         always {
-            cleanWs(
-                cleanWhenAborted: true,
-                cleanWhenFailure: true,
-                cleanWhenNotBuilt: true,
-                cleanWhenSuccess: true,
-                cleanWhenUnstable: true,
-                deleteDirs: true
-            )
-            
             script {
-                def buildStatus = currentBuild.currentResult
-                def color = buildStatus == 'SUCCESS' ? 'good' : 'danger'
-                
-//                 // Slack notification
-//                 slackSend(
-//                     channel: '#ci-cd-notifications',
-//                     color: color,
-//                     message: """
-//                         *${APP_NAME}* - Build #${BUILD_NUMBER}
-//                         *Status:* ${buildStatus}
-//                         *Branch:* ${env.GIT_BRANCH ?: 'N/A'}
-//                         *Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
-//                         *Author:* ${env.GIT_AUTHOR ?: 'N/A'}
-//                         *Duration:* ${currentBuild.durationString}
-//                         *Deploy Target:* ${params.DEPLOY_TARGET}
-//                         <${BUILD_URL}|View Build>
-//                     """
-//                 )
+                def helpers = load('.jenkins/utils/helpers.groovy')
+                helpers.recordMetrics()
             }
+            cleanWs(
+                deleteDirs: true,
+                patterns: [[pattern: '.m2/repository/**', type: 'EXCLUDE']]
+            )
         }
-        
         success {
-            echo "Pipeline completed successfully!"
             script {
-                if (env.DEPLOY_ENV == 'production') {
-                    createGitTag("v${APP_VERSION}")
+                def notifications = load('.jenkins/utils/notifications.groovy')
+                def helpers = load('.jenkins/utils/helpers.groovy')
+                notifications.send('SUCCESS')
+                if (env.AUTO_DEPLOY_TARGET == 'production') {
+                    helpers.createGitTag("v${APP_VERSION}")
                 }
             }
         }
-        
         failure {
-            echo "Pipeline failed!"
-//             emailext(
-//                 subject: "FAILED: ${APP_NAME} Build #${BUILD_NUMBER}",
-//                 body: """
-//                     Build failed for ${APP_NAME}.
-//
-//                     Build: #${BUILD_NUMBER}
-//                     Branch: ${env.GIT_BRANCH}
-//                     Commit: ${env.GIT_COMMIT}
-//
-//                     Check console output at: ${BUILD_URL}console
-//                 """,
-//                 to: '${DEFAULT_RECIPIENTS}',
-//                 recipientProviders: [culprits(), requestor()]
-//             )
+            script {
+                def notifications = load('.jenkins/utils/notifications.groovy')
+                notifications.send('FAILURE', 'Pipeline failed!')
+            }
         }
-        
         unstable {
-            echo "Pipeline is unstable!"
+            script {
+                def notifications = load('.jenkins/utils/notifications.groovy')
+                notifications.send('UNSTABLE')
+            }
+        }
+        aborted {
+            script {
+                def notifications = load('.jenkins/utils/notifications.groovy')
+                notifications.send('ABORTED')
+            }
         }
     }
-}
-
-// Helper Functions
-def deployToEnvironment(String environment, String slot = null) {
-    def namespace = "app-${environment}"
-    def helmRelease = slot ? "${APP_NAME}-${slot}" : APP_NAME
-    
-    withCredentials([file(credentialsId: "kubeconfig-${environment}", variable: 'KUBECONFIG')]) {
-        sh """
-            helm upgrade --install ${helmRelease} ./helm/${APP_NAME} \
-                --namespace ${namespace} \
-                --set image.repository=${DOCKER_IMAGE} \
-                --set image.tag=${APP_VERSION} \
-                --set environment=${environment} \
-                --set replicaCount=${getReplicaCount(environment)} \
-                --set resources.requests.memory=${getMemoryRequest(environment)} \
-                --set resources.limits.memory=${getMemoryLimit(environment)} \
-                --wait \
-                --timeout 10m
-        """
-    }
-}
-
-def runSmokeTests(String environment) {
-    def baseUrl = getEnvironmentUrl(environment)
-    sh """
-        echo "Running smoke tests against ${baseUrl}"
-        curl -f ${baseUrl}/api/v1/health || exit 1
-        curl -f ${baseUrl}/api/v1/info || exit 1
-        echo "Smoke tests passed!"
-    """
-}
-
-def runPerformanceTests(String environment) {
-    def baseUrl = getEnvironmentUrl(environment)
-    sh """
-        echo "Running performance tests against ${baseUrl}"
-        # Add k6, JMeter, or other performance testing tool commands here
-        echo "Performance tests completed"
-    """
-}
-
-def runHealthCheck(String environment, String slot) {
-    def baseUrl = getEnvironmentUrl(environment, slot)
-    def maxRetries = 10
-    def retryInterval = 15
-    
-    for (int i = 0; i < maxRetries; i++) {
-        def result = sh(
-            script: "curl -sf ${baseUrl}/api/v1/health",
-            returnStatus: true
-        )
-        if (result == 0) {
-            return true
-        }
-        sleep(retryInterval)
-    }
-    return false
-}
-
-def getCurrentProductionSlot() {
-    // Query current active slot from load balancer or service mesh
-    return sh(
-        script: "kubectl get service ${APP_NAME}-prod -o jsonpath='{.spec.selector.slot}' 2>/dev/null || echo 'blue'",
-        returnStdout: true
-    ).trim()
-}
-
-def switchProductionTraffic(String targetSlot) {
-    sh """
-        kubectl patch service ${APP_NAME}-prod -p '{"spec":{"selector":{"slot":"${targetSlot}"}}}'
-    """
-}
-
-def rollbackProduction() {
-    def currentSlot = getCurrentProductionSlot()
-    def previousSlot = currentSlot == 'blue' ? 'green' : 'blue'
-    switchProductionTraffic(previousSlot)
-    echo "Rolled back to ${previousSlot} slot"
-}
-
-def createGitTag(String tag) {
-    withCredentials([usernamePassword(credentialsId: 'git-credentials', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
-        sh """
-            git config user.email "jenkins@company.com"
-            git config user.name "Jenkins CI"
-            git tag -a ${tag} -m "Release ${tag}"
-            git push https://${GIT_USER}:${GIT_TOKEN}@\${GIT_URL#https://} ${tag}
-        """
-    }
-}
-
-def getEnvironmentUrl(String environment, String slot = null) {
-    def urls = [
-        'dev': 'https://dev.app.company.com',
-        'uat': 'https://uat.app.company.com',
-        'production': slot ? "https://${slot}.prod.app.company.com" : 'https://app.company.com'
-    ]
-    return urls[environment]
-}
-
-def getReplicaCount(String environment) {
-    def counts = ['dev': 1, 'uat': 2, 'production': 3]
-    return counts[environment] ?: 1
-}
-
-def getMemoryRequest(String environment) {
-    def memory = ['dev': '256Mi', 'uat': '512Mi', 'production': '1Gi']
-    return memory[environment] ?: '256Mi'
-}
-
-def getMemoryLimit(String environment) {
-    def memory = ['dev': '512Mi', 'uat': '1Gi', 'production': '2Gi']
-    return memory[environment] ?: '512Mi'
 }
