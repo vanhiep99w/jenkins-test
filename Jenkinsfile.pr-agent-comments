@@ -1,0 +1,90 @@
+// Jenkinsfile for PR-Agent comment triggers
+// Requires: Generic Webhook Trigger Plugin
+// GitHub Webhook: https://your-jenkins/generic-webhook-trigger/invoke?token=pr-agent-comments
+
+pipeline {
+    agent any
+
+    triggers {
+        GenericTrigger(
+            genericVariables: [
+                [key: 'action', value: '$.action'],
+                [key: 'comment_body', value: '$.comment.body'],
+                [key: 'pr_number', value: '$.issue.number'],
+                [key: 'repo_full_name', value: '$.repository.full_name'],
+                [key: 'is_pull_request', value: '$.issue.pull_request.url']
+            ],
+            causeString: 'PR Comment Trigger',
+            token: 'pr-agent-comments',
+            printContributedVariables: true,
+            printPostContent: true,
+            silentResponse: false,
+            regexpFilterText: '$comment_body',
+            regexpFilterExpression: '^/(review|describe|improve|ask|update_changelog|add_docs|test|reflect|custom_labels|analyze).*'
+        )
+    }
+
+    environment {
+        GITHUB_USER = 'vanhiep99w'
+    }
+
+    stages {
+        stage('Validate') {
+            steps {
+                script {
+                    if (!env.is_pull_request) {
+                        currentBuild.result = 'NOT_BUILT'
+                        error('Not a PR comment, skipping')
+                    }
+                    
+                    // Extract command from comment
+                    def matcher = env.comment_body =~ /^\/(review|describe|improve|ask|update_changelog|add_docs|test|reflect|custom_labels|analyze)(.*)/
+                    if (matcher.matches()) {
+                        env.PR_AGENT_COMMAND = matcher[0][1]
+                        env.PR_AGENT_ARGS = matcher[0][2]?.trim() ?: ''
+                    } else {
+                        currentBuild.result = 'NOT_BUILT'
+                        error('No valid PR-Agent command found')
+                    }
+                    
+                    echo "Command: ${env.PR_AGENT_COMMAND}"
+                    echo "Args: ${env.PR_AGENT_ARGS}"
+                    echo "PR: #${env.pr_number}"
+                }
+            }
+        }
+
+        stage('Run PR-Agent') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'zai-api-key', variable: 'ZAI_API_KEY'),
+                    usernamePassword(credentialsId: 'github-credentials', usernameVariable: 'GH_USER', passwordVariable: 'GITHUB_TOKEN')
+                ]) {
+                    sh """
+                        echo "Running PR-Agent command: ${PR_AGENT_COMMAND} on PR #${pr_number}"
+                        docker run --rm \
+                            -e OPENAI__KEY=\${ZAI_API_KEY} \
+                            -e OPENAI__API_BASE=https://api.z.ai/api/coding/paas/v4/ \
+                            -e CONFIG__MODEL=openai/glm-4.6 \
+                            -e CONFIG__FALLBACK_MODELS='["openai/glm-4.6"]' \
+                            -e CONFIG__CUSTOM_MODEL_MAX_TOKENS=32000 \
+                            -e GITHUB__USER_TOKEN=\${GITHUB_TOKEN} \
+                            -e GITHUB__DEPLOYMENT_TYPE=user \
+                            codiumai/pr-agent:latest \
+                            --pr_url=https://github.com/${repo_full_name}/pull/${pr_number} \
+                            ${PR_AGENT_COMMAND} ${PR_AGENT_ARGS}
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo "PR-Agent command failed"
+        }
+        success {
+            echo "PR-Agent command completed successfully"
+        }
+    }
+}
