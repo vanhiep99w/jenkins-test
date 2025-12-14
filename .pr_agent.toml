@@ -1,0 +1,24 @@
+[pr_reviewer]
+enable_review_labels_security = true
+enable_review_labels_effort = true
+require_security_review = true
+num_code_suggestions = 10
+inline_code_comments = true
+extra_instructions = """
+- Focus on security vulnerabilities, bugs, and performance issues
+- Check for hardcoded secrets or credentials
+- Verify proper error handling
+- Look for potential null pointer exceptions
+- Suggest improvements for code readability
+"""
+
+[pr_description]
+publish_labels = true
+add_original_user_description = true
+
+[pr_code_suggestions]
+num_code_suggestions = 10
+
+[litellm]
+# Using z.ai as OpenAI-compatible endpoint
+enable_callbacks = false
